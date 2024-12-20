@@ -1,217 +1,298 @@
 # Instagram Explore Recommendation System Design
 
-## Problem Statement
-Design a large-scale recommendation system for Instagram's Explore tab that serves personalized content to billions of users while maintaining high performance, reliability, and engagement.
+## Table of Contents
+1. [System Overview](#system-overview)
+2. [Architecture Deep Dive](#architecture-deep-dive)
+3. [ML Training Pipeline](#ml-training-pipeline)
+4. [Two-Tower Architecture](#two-tower-architecture)
+5. [Monitoring System](#monitoring-system)
+6. [Interview Deep Dive](#interview-deep-dive)
 
-## System Requirements
+## System Overview
 
-### Functional Requirements
-- Serve personalized recommendations based on user interests and behavior
-- Handle multiple content types (images, videos, Reels, Stories)
-- Support real-time updates based on user interactions
+### Problem Statement
+Design a scalable recommendation system for Instagram's Explore tab that serves personalized content to billions of users while maintaining:
+- Low latency (< 100ms for initial recommendations)
+- High throughput (millions of QPS)
+- Real-time personalization
+- Content diversity and freshness
+
+### System Requirements
+
+#### Functional Requirements
+- Serve personalized content recommendations
+- Handle multiple content types (images, videos, Reels)
+- Process real-time user interactions
+- Support both cold-start and warm-start scenarios
 - Maintain content diversity and freshness
-- Handle cold-start problems for new users and items
 
-### Non-Functional Requirements
-- Latency: < 100ms for initial recommendations
+#### Non-Functional Requirements
+- Latency: < 100ms for initial page load
 - Availability: 99.99% uptime
 - Scalability: Handle millions of QPS
-- Storage: Efficient handling of billions of items
 - Consistency: Maintain recommendation quality across updates
 
-## High-Level Architecture
+## Architecture Deep Dive
 
-### System Components
-1. **Candidate Generation Service**
-   - Retrieves initial set of candidates
-   - Uses multi-modal embeddings
-   - Handles different retrieval strategies
+### High-Level System Architecture
 
-2. **Ranking Service**
-   - Fine-grained scoring of candidates
-   - Multi-objective optimization
-   - Real-time feature computation
+[Insert high-level-arch diagram]
 
-3. **Feature Store**
-   - User features (historical behavior, demographics)
-   - Item features (engagement metrics, content features)
-   - Real-time features (recent interactions)
+Key components:
 
-4. **Model Training Pipeline**
-   - Regular model retraining
-   - A/B testing framework
-   - Model validation and deployment
+1. **Client Layer**
+   - User Interface
+   - Client-side caching
+   - Progressive loading
 
-## Detailed Design
+2. **API Gateway & Load Balancing**
+   ```python
+   class LoadBalancer:
+       def __init__(self):
+           self.strategies = {
+               'ingestion': RoundRobinStrategy(),
+               'processing': LeastConnectionStrategy(),
+               'serving': ConsistentHashingStrategy()
+           }
 
-### 1. Model Architecture
+       async def route_request(self, request_type, request):
+           strategy = self.strategies[request_type]
+           server = strategy.select_server()
+           return await server.process(request)
+   ```
 
+3. **Recommendation Service**
+   - Candidate retrieval
+   - Ranking service
+   - Feature service
+
+4. **Storage Layer**
+   - Redis cache
+   - Vector store
+   - Feature store
+
+## ML Training Pipeline
+
+[Insert ml-training-revised diagram]
+
+### Data Pipeline
 ```python
-class TwoTowerModel:
+class DataPipeline:
+    def __init__(self):
+        self.validators = {
+            'schema': SchemaValidator(),
+            'quality': QualityChecker(),
+            'statistics': StatsAnalyzer()
+        }
+        
+    async def process_data(self, raw_data):
+        # Data validation
+        validation_results = await self.validate_data(raw_data)
+        if not validation_results.passed:
+            raise DataQualityError(validation_results.errors)
+            
+        # Feature processing
+        processed_data = await self.process_features(raw_data)
+        
+        # Train/val/test split with time-based splitting
+        return self.create_datasets(processed_data)
+```
+
+### Feature Engineering
+1. **User Features**
+   - Historical interactions
+   - Demographics
+   - Session features
+
+2. **Item Features**
+   - Visual features (CNN embeddings)
+   - Text features (BERT embeddings)
+   - Engagement features
+
+## Two-Tower Architecture
+
+[Insert two-tower-detailed diagram]
+
+### Model Architecture
+```python
+class TwoTowerModel(nn.Module):
     def __init__(self, config):
-        self.user_tower = UserEncoder(config)
-        self.item_tower = ItemEncoder(config)
-        self.interaction_layer = InteractionLayer(config)
-        
-    def encode_user(self, user_features):
-        # User encoding with attention mechanism
-        historical_embeddings = self.user_tower.encode_history(user_features["history"])
-        user_profile = self.user_tower.encode_profile(user_features["profile"])
-        
-        return self.user_tower.fusion_layer([historical_embeddings, user_profile])
-        
-    def encode_item(self, item_features):
-        # Multi-modal item encoding
-        visual_embedding = self.item_tower.encode_visual(item_features["visual"])
-        text_embedding = self.item_tower.encode_text(item_features["text"])
-        engagement_embedding = self.item_tower.encode_engagement(item_features["engagement"])
-        
-        return self.item_tower.fusion_layer([visual_embedding, text_embedding, engagement_embedding])
+        super().__init__()
+        self.user_tower = UserTower(config)
+        self.item_tower = ItemTower(config)
+        self.interaction = InteractionLayer(config)
         
     def forward(self, user_features, item_features):
-        user_embedding = self.encode_user(user_features)
-        item_embedding = self.encode_item(item_features)
+        # User tower processing
+        user_embedding = self.user_tower(user_features)
         
-        return self.interaction_layer(user_embedding, item_embedding)
+        # Item tower processing
+        item_embedding = self.item_tower(item_features)
+        
+        # Compute similarity and additional features
+        similarity = self.interaction(user_embedding, item_embedding)
+        return similarity
 ```
 
-### 2. Feature Engineering Pipeline
+### Negative Sampling Strategies
+1. **Hard Negative Mining**
+   ```python
+   class HardNegativeMiner:
+       def __init__(self, queue_size=1000):
+           self.queue = deque(maxlen=queue_size)
+           self.threshold = 0.7
+           
+       def find_hard_negatives(self, anchor, positive):
+           similarities = cosine_similarity(anchor, self.queue)
+           hard_negatives = self.queue[
+               (similarities > self.threshold) & 
+               (similarities < self.positive_similarity)
+           ]
+           return hard_negatives
+   ```
 
+2. **Batch Negatives**
+   - In-batch sampling
+   - Cross-batch mining
+   - Dynamic queue
+
+### Ranking System
 ```python
-class FeatureProcessor:
-    def __init__(self, config):
-        self.feature_store = FeatureStore(config)
-        self.stream_processor = StreamProcessor(config)
+class RankingSystem:
+    def __init__(self):
+        self.retrieval = AnnModel()
+        self.ranker = DeepRankingModel()
+        self.diversity = DiversityReranker()
         
-    async def process_user_features(self, user_id, event):
-        # Process real-time user features
-        user_features = await self.feature_store.get_user_features(user_id)
-        recent_interactions = await self.stream_processor.get_recent_interactions(user_id)
+    async def rank_items(self, user_embedding, candidates):
+        # Stage 1: Initial retrieval
+        initial_scores = await self.retrieval.get_scores(
+            user_embedding, candidates
+        )
+        top_k = self.get_top_k(initial_scores, k=1000)
         
-        return self.compute_user_features(user_features, recent_interactions)
-        
-    async def process_item_features(self, item_id):
-        # Process item features with caching
-        cached_features = await self.feature_store.get_cached_item_features(item_id)
-        if cached_features and not self.is_stale(cached_features):
-            return cached_features
-            
-        return await self.compute_and_cache_item_features(item_id)
-```
-
-## Training Pipeline
-
-### Model Training
-
-```python
-class TrainingPipeline:
-    def __init__(self, config):
-        self.model = TwoTowerModel(config)
-        self.optimizer = self.setup_optimizer()
-        self.metrics_tracker = MetricsTracker()
-        
-    def train_epoch(self, data_loader):
-        for batch in data_loader:
-            # Multi-task training
-            engagement_loss = self.compute_engagement_loss(batch)
-            diversity_loss = self.compute_diversity_loss(batch)
-            freshness_loss = self.compute_freshness_loss(batch)
-            
-            total_loss = self.combine_losses([
-                engagement_loss,
-                diversity_loss,
-                freshness_loss
-            ])
-            
-            self.optimizer.zero_grad()
-            total_loss.backward()
-            self.optimizer.step()
-            
-            self.metrics_tracker.update(batch, total_loss)
-```
-
-## Online Serving
-
-### Candidate Retrieval
-
-```python
-class CandidateRetriever:
-    def __init__(self, config):
-        self.vector_store = VectorStore(config)
-        self.cache = Cache(config)
-        self.diversity_controller = DiversityController(config)
-        
-    async def get_candidates(self, user_id, k=100):
-        user_embedding = await self.get_user_embedding(user_id)
-        
-        # Multi-strategy retrieval
-        candidates = await asyncio.gather(
-            self.vector_store.ann_search(user_embedding, k),
-            self.get_trending_items(user_id),
-            self.get_exploration_items(user_id)
+        # Stage 2: Fine-grained ranking
+        final_scores = await self.ranker.score(
+            user_embedding,
+            top_k,
+            self.get_context_features()
         )
         
-        return self.diversity_controller.rerank(candidates)
+        # Stage 3: Diversity reranking
+        return self.diversity.rerank(final_scores)
 ```
 
-## Quality Assurance
+## Monitoring System
 
-### Monitoring System
+[Insert detailed-monitoring diagram]
 
+### Data Monitoring
+1. **Feature Monitoring**
+   - Feature drift detection
+   - Distribution monitoring
+   - Missing value patterns
+
+2. **Quality Checks**
+   - Schema validation
+   - Business rule validation
+   - Statistical checks
+
+### Model Monitoring
 ```python
-class QualityMonitor:
-    def __init__(self, config):
+class ModelMonitor:
+    def __init__(self):
         self.metrics = {
-            "online": {
-                "ctr": self.compute_ctr,
-                "watch_time": self.compute_watch_time,
-                "diversity": self.compute_diversity
+            'online': {
+                'ctr': CTRTracker(),
+                'engagement': EngagementTracker(),
+                'diversity': DiversityTracker()
             },
-            "offline": {
-                "ndcg": self.compute_ndcg,
-                "precision": self.compute_precision,
-                "recall": self.compute_recall
+            'offline': {
+                'ndcg': NDCGCalculator(),
+                'map': MAPCalculator(),
+                'coverage': CoverageCalculator()
             }
         }
         
-    def monitor_quality(self, recommendations, user_feedback):
-        metrics = {}
-        for metric_name, metric_fn in self.metrics["online"].items():
-            metrics[metric_name] = metric_fn(recommendations, user_feedback)
-            
-        return self.analyze_metrics(metrics)
+    async def track_metrics(self, predictions, actuals):
+        results = {}
+        for name, tracker in self.metrics.items():
+            results[name] = await tracker.compute(
+                predictions, actuals
+            )
+        return results
 ```
 
-## Scaling Considerations
+## Interview Deep Dive
 
-1. **Distributed Training**
-   - Model parallelism for large embeddings
-   - Data parallelism for batch processing
-   - Efficient gradient synchronization
+### System Design Considerations
 
-2. **Serving Optimization**
-   - Pre-computation of heavy features
-   - Caching strategy for embeddings
-   - Batch prediction for efficiency
+1. **Scalability**
+   - How to handle 10x traffic increase?
+   - Strategies for reducing latency
+   - Handling hot items/users
 
-3. **Storage Optimization**
-   - Efficient embedding compression
-   - Smart caching policies
-   - Data lifecycle management
+2. **Reliability**
+   - Failure handling mechanisms
+   - Data consistency approaches
+   - Recovery procedures
 
-## Interview Deep Dive Topics
+3. **ML Architecture**
+   - Model selection rationale
+   - Training-serving skew handling
+   - Feature engineering choices
 
-1. **Model Architecture Choices**
-   - Why two-tower vs single-tower?
-   - How to handle multi-modal data?
-   - Trade-offs in embedding dimensions?
+### Common Interview Questions
 
-2. **Scaling Decisions**
-   - How to handle write-heavy workloads?
-   - Strategies for real-time feature updates?
-   - Cache invalidation approaches?
+1. **Data Pipeline**
+   Q: How do you ensure data quality?
+   A: Implement multi-layer validation:
+   - Schema validation
+   - Data quality checks
+   - Distribution monitoring
+   - Anomaly detection
 
-3. **Quality Control**
-   - Handling bias in recommendations
-   - Maintaining content diversity
-   - A/B testing strategies
+2. **Model Architecture**
+   Q: Why choose two-tower over other architectures?
+   A: Benefits include:
+   - Separate user/item processing
+   - Efficient ANN search
+   - Scalable inference
+   - Easy to update independently
+
+3. **Online Serving**
+   Q: How to handle real-time updates?
+   A: Use stream processing:
+   - Kafka for event streaming
+   - Real-time feature updates
+   - Incremental model updates
+
+### Performance Optimization
+
+1. **Latency Optimization**
+   ```python
+   class CachingStrategy:
+       def __init__(self):
+           self.embedding_cache = LRUCache()
+           self.prediction_cache = TTLCache()
+           
+       async def get_predictions(self, user_id):
+           if cached := await self.prediction_cache.get(user_id):
+               return cached
+               
+           predictions = await self.compute_predictions(user_id)
+           await self.prediction_cache.set(
+               user_id, predictions, ttl=3600
+           )
+           return predictions
+   ```
+
+2. **Resource Optimization**
+   - Embedding compression
+   - Batch prediction
+   - Caching strategies
+
+3. **Quality Assurance**
+   - A/B testing framework
+   - Shadow testing
+   - Gradual rollout
